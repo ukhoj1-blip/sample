@@ -1,0 +1,431 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>법인카드 집근처 분석</title>
+<link rel="stylesheet" href="css/style.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/marked/12.0.2/marked.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.1.6/purify.min.js"></script>
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <span class="logo">◎</span>
+    <div>
+      <h1>법인카드 집근처 분석</h1>
+      <p class="sub">가맹점 위치와 사용자 집주소 간 거리로 사적 사용 의심 거래를 찾아냅니다</p>
+    </div>
+  </div>
+  <div class="status">
+    <span id="aiBadge" class="badge badge-off">AI 미연결</span>
+    <span id="kakaoBadge" class="badge badge-off">카카오지도 미연결</span>
+  </div>
+</header>
+
+<nav class="tabs" id="tabs">
+  <button data-tab="upload" class="active">① 데이터 업로드</button>
+  <button data-tab="homes">② 집주소 관리</button>
+  <button data-tab="dash">③ 분석 대시보드</button>
+  <button data-tab="map">④ 지도</button>
+  <button data-tab="holiday">⑤ 휴일 사용</button>
+  <button data-tab="biz">⑥ 휴폐업 조회</button>
+  <button data-tab="detail">⑦ 상세 내역</button>
+  <button data-tab="ai">⑧ AI 요약·보고서</button>
+  <button data-tab="settings">⚙ 설정</button>
+</nav>
+
+<main>
+  <!-- 업로드 -->
+  <section id="tab-upload" class="tab active">
+    <div class="steps" id="steps"></div>
+
+    <div class="card">
+      <h2>카드 사용내역 업로드</h2>
+      <p class="muted">엑셀(.xlsx/.xls) 또는 CSV. 첫 행(또는 상단 몇 행 안)에 <b>순번 · 카드번호 · 이용자명 · 이용일 · 가맹점명 · 이용금액 · 가맹점 주소</b> 등의 헤더가 있어야 합니다. 여러 파일을 올리면 승인번호 기준으로 중복을 제거하고 합칩니다.</p>
+      <label class="drop" id="drop">
+        <input type="file" id="fileInput" accept=".xlsx,.xls,.csv" multiple hidden>
+        <span class="drop-icon">⬆</span>
+        <span>파일을 끌어다 놓거나 <u>클릭해서 선택</u></span>
+      </label>
+      <div class="row gap">
+        <button class="btn ghost" id="btnClearTx">업로드 내역 비우기</button>
+      </div>
+      <div id="uploadInfo"></div>
+    </div>
+
+    <div class="card">
+      <h2>분석 실행</h2>
+      <p class="muted">가맹점 주소와 집주소를 카카오 주소검색으로 좌표 변환(결과는 브라우저에 캐시)한 뒤 거리를 계산합니다.</p>
+      <div class="row gap">
+        <button class="btn primary" id="btnRun">분석 실행</button>
+        <button class="btn ghost" id="btnRegeo">좌표 캐시 지우고 다시 변환</button>
+      </div>
+      <div class="progress hidden" id="progWrap"><div class="bar" id="progBar"></div><span id="progText"></span></div>
+      <div id="runInfo"></div>
+    </div>
+  </section>
+
+  <!-- 집주소 -->
+  <section id="tab-homes" class="tab">
+    <div class="card">
+      <div class="row between">
+        <h2>사용자별 집주소</h2>
+        <div class="row gap">
+          <label class="btn ghost">일괄 업로드(엑셀/CSV)<input type="file" id="homeFile" accept=".xlsx,.xls,.csv" hidden></label>
+          <button class="btn ghost" id="btnHomeTemplate">양식 다운로드</button>
+          <button class="btn primary" id="btnGeoHomes">집주소 좌표 변환</button>
+        </div>
+      </div>
+      <p class="muted">업로드된 내역의 이용자명이 자동으로 나열됩니다. 일괄 업로드 양식 컬럼: <b>이용자명, 집주소</b>. 도로명/지번 주소 모두 가능하며 동·호수는 없어도 됩니다.</p>
+      <p class="notice">집주소는 이 브라우저(localStorage)에만 저장되며, 좌표 변환 시 주소 문자열만 카카오 로컬 API로 전송됩니다.</p>
+      <div class="table-wrap"><table class="tbl" id="homeTable"></table></div>
+    </div>
+  </section>
+
+  <!-- 대시보드 -->
+  <section id="tab-dash" class="tab">
+    <div id="dashEmpty" class="empty">분석을 먼저 실행하세요.</div>
+    <div id="dash" class="hidden">
+      <div class="kpis" id="kpis"></div>
+      <div class="grid2">
+        <div class="card">
+          <h2>사용자별 현황</h2>
+          <div class="table-wrap"><table class="tbl" id="userSummary"></table></div>
+        </div>
+        <div class="card">
+          <h2>집근처 사용 업종</h2>
+          <div id="catBars" class="bars"></div>
+        </div>
+      </div>
+      <div class="grid2">
+        <div class="card">
+          <h2>집근처 자주 쓴 가맹점</h2>
+          <div class="table-wrap"><table class="tbl" id="topMerchants"></table></div>
+        </div>
+        <div class="card">
+          <h2>위험점수 상위 거래</h2>
+          <div class="table-wrap"><table class="tbl" id="topRisk"></table></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 지도 -->
+  <section id="tab-map" class="tab">
+    <div class="map-layout">
+      <aside class="map-side card">
+        <label class="field">사용자
+          <select id="mapUser"></select>
+        </label>
+        <label class="field">표시
+          <select id="mapFilter">
+            <option value="all">전체 가맹점</option>
+            <option value="flag">집근처·주의만</option>
+          </select>
+        </label>
+        <div class="legend">
+          <span><i class="dot lvl-near"></i>집근처</span>
+          <span><i class="dot lvl-warn"></i>주의</span>
+          <span><i class="dot lvl-ok"></i>정상</span>
+          <span><i class="dot lvl-office"></i>회사근처</span>
+        </div>
+        <div id="mapList" class="map-list"></div>
+      </aside>
+      <div class="map-main card">
+        <div id="map"></div>
+        <div id="mapMsg" class="map-msg">카카오지도 키를 설정하고 분석을 실행하세요.</div>
+      </div>
+    </div>
+    <div class="card hidden" id="mapDetail"></div>
+  </section>
+
+  <!-- 휴일 사용 -->
+  <section id="tab-holiday" class="tab">
+    <div id="holEmpty" class="empty">카드내역을 먼저 업로드하세요. 휴일 분석은 카카오 연결 없이도 동작합니다.</div>
+    <div id="hol" class="hidden">
+      <div class="card filters">
+        <select id="hUser"><option value="">전체 사용자</option></select>
+        <select id="hType">
+          <option value="">전체 휴일</option>
+          <option value="공휴일">공휴일</option>
+          <option value="토요일">토요일</option>
+          <option value="일요일">일요일</option>
+        </select>
+        <label class="chk"><input type="checkbox" id="hSuspect">의심 거래만 (집근처·주의·심야·고위험업종)</label>
+        <span id="hDateTag"></span>
+        <span class="spacer"></span>
+        <span class="muted" id="hRule"></span>
+      </div>
+      <div class="kpis" id="hKpis"></div>
+      <div class="grid2">
+        <div class="card">
+          <h2>사용자별 휴일 사용</h2>
+          <div class="table-wrap"><table class="tbl" id="hUsers"></table></div>
+        </div>
+        <div class="card">
+          <h2>휴일 사용 업종</h2>
+          <div id="hCats" class="bars"></div>
+        </div>
+      </div>
+      <div class="grid2">
+        <div class="card">
+          <h2>날짜별 휴일 사용 <span class="muted" style="font-weight:400">— 행을 누르면 아래 목록이 그 날짜로 좁혀집니다</span></h2>
+          <div class="table-wrap"><table class="tbl" id="hDates"></table></div>
+        </div>
+        <div class="card">
+          <h2>월별 휴일 사용 금액</h2>
+          <div id="hMonths" class="bars"></div>
+        </div>
+      </div>
+      <div class="card" style="margin-top:16px">
+        <div class="row between">
+          <h2>휴일 거래 목록</h2>
+          <div class="row gap"><span class="muted" id="hCount"></span><button class="btn primary" id="btnHolExport">엑셀 다운로드</button></div>
+        </div>
+        <div class="table-wrap tall"><table class="tbl" id="hTable"></table></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 휴폐업 -->
+  <section id="tab-biz" class="tab">
+    <div class="card">
+      <div class="row between">
+        <div>
+          <h2>가맹점 휴폐업 조회</h2>
+          <p class="muted" style="margin:0">카드내역의 <b>사업자 등록번호</b>로 국세청 사업자 상태(계속·휴업·폐업)를 조회합니다. 폐업일 이후 결제는 실제 영업하지 않는 가맹점일 수 있어 위험점수 +40을 줍니다.</p>
+        </div>
+        <div class="row gap">
+          <button class="btn primary" id="btnBizRun">휴폐업 조회 실행</button>
+          <button class="btn ghost" id="btnBizRerun">전체 다시 조회</button>
+        </div>
+      </div>
+      <div class="progress hidden" id="bizProg"><div class="bar" id="bizProgBar"></div><span id="bizProgText"></span></div>
+      <p id="bizInfo" class="muted" style="margin-bottom:0"></p>
+    </div>
+    <div id="bizEmpty" class="empty">휴폐업 조회를 실행하면 결과가 표시됩니다.</div>
+    <div id="bizBody" class="hidden">
+      <div class="kpis" id="bizKpis"></div>
+      <div class="card">
+        <div class="row between">
+          <h2>가맹점(사업자)별 상태</h2>
+          <div class="row gap">
+            <select id="bizFilter">
+              <option value="issue">문제 있는 가맹점만</option>
+              <option value="all">전체 가맹점</option>
+            </select>
+            <button class="btn primary" id="btnBizExport">문제 거래 엑셀 다운로드</button>
+          </div>
+        </div>
+        <div class="table-wrap tall"><table class="tbl" id="bizTable"></table></div>
+      </div>
+      <div class="card">
+        <h2>판정 기준</h2>
+        <table class="tbl compact">
+          <tr><td><span class="tag red">폐업 후 거래</span></td><td>국세청 폐업일보다 이용일이 늦음 — 위험점수 +40</td></tr>
+          <tr><td><span class="tag red">미등록 사업자</span></td><td>국세청에 등록되지 않은 사업자번호 — 위험점수 +20</td></tr>
+          <tr><td><span class="tag red">현재 휴업</span></td><td>조회 시점에 휴업 중 (국세청은 휴업 시작일을 제공하지 않아 거래 당시 상태는 확인 필요)</td></tr>
+          <tr><td><span class="tag">거래 후 폐업</span></td><td>거래 이후에 폐업 — 참고용</td></tr>
+          <tr><td><span class="tag">과세유형 불일치</span></td><td>카드 전표 과세유형과 국세청 현재 과세유형이 다름 (유형 전환일 수 있음) — 참고용</td></tr>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <!-- 상세 -->
+  <section id="tab-detail" class="tab">
+    <div class="card">
+      <div class="filters">
+        <select id="fUser"><option value="">전체 사용자</option></select>
+        <select id="fLevel">
+          <option value="">전체 판정</option>
+          <option value="near">집근처</option>
+          <option value="warn">주의</option>
+          <option value="ok">정상</option>
+          <option value="office">회사근처</option>
+          <option value="excluded">분석제외</option>
+          <option value="unknown">위치불명</option>
+          <option value="nohome">집주소 미등록</option>
+        </select>
+        <label class="chk"><input type="checkbox" id="fHoliday">휴일만</label>
+        <label class="chk"><input type="checkbox" id="fNight">심야만</label>
+        <label class="chk"><input type="checkbox" id="fBiz">휴폐업 문제만</label>
+        <input type="search" id="fText" placeholder="가맹점·주소·업종 검색">
+        <span class="spacer"></span>
+        <span id="fCount" class="muted"></span>
+        <button class="btn primary" id="btnExport">엑셀 다운로드</button>
+      </div>
+      <div class="table-wrap tall"><table class="tbl sortable" id="detailTable"></table></div>
+    </div>
+  </section>
+
+  <!-- AI 요약·보고서 -->
+  <section id="tab-ai" class="tab">
+    <div class="grid2">
+      <div class="card">
+        <h2>이상징후 요약</h2>
+        <p class="muted">집근처·휴일·휴폐업 탐지 결과를 감사 담당자가 3분 안에 파악할 수 있도록 핵심 이상징후, 우선 확인 대상, 권장 조치로 정리합니다.</p>
+        <div class="row gap"><button class="btn primary" id="btnAiSummary">이상징후 요약 생성</button></div>
+      </div>
+      <div class="card">
+        <h2>경영진 보고서</h2>
+        <div class="grid-form">
+          <label class="field">보고자<input type="text" id="aiAuthor" placeholder="감사팀 홍길동"></label>
+          <label class="field">수신<input type="text" id="aiTo" placeholder="대표이사, 경영지원본부장"></label>
+          <label class="field">분량
+            <select id="aiLength">
+              <option value="short">1페이지 요약</option>
+              <option value="standard" selected>표준 (2~3페이지)</option>
+              <option value="long">상세</option>
+            </select>
+          </label>
+          <label class="field">어조
+            <select id="aiTone">
+              <option value="formal" selected>공식 보고 (개조식)</option>
+              <option value="plain">평이한 서술</option>
+            </select>
+          </label>
+        </div>
+        <label class="field">추가 지시사항 (선택)
+          <input type="text" id="aiExtra" placeholder="예) 주유 업종 사용을 중점적으로, 재발 방지 제도 개선안 포함">
+        </label>
+        <div class="row gap"><button class="btn primary" id="btnAiReport">경영진 보고서 작성</button></div>
+      </div>
+    </div>
+
+    <div class="card" style="margin-top:16px">
+      <div class="filters" style="margin-bottom:0">
+        <select id="aiUser"><option value="">전체 사용자</option></select>
+        <label class="chk"><input type="checkbox" id="aiMask" checked>이용자 이름 가명 처리 후 전송</label>
+        <span class="spacer"></span>
+        <button class="btn small" id="btnAiPreview">AI에 보낼 데이터 보기</button>
+      </div>
+      <pre id="aiPreview" class="json-preview hidden"></pre>
+    </div>
+
+    <div class="card" id="aiOutCard">
+      <div class="row between">
+        <h2 id="aiOutTitle">결과</h2>
+        <div class="row gap">
+          <span class="muted" id="aiMeta"></span>
+          <button class="btn small danger hidden" id="btnAiStop">중지</button>
+          <button class="btn small" id="btnAiCopy">복사</button>
+          <button class="btn small" id="btnAiPrint">인쇄·PDF</button>
+          <button class="btn small" id="btnAiWord">Word 다운로드</button>
+        </div>
+      </div>
+      <div id="aiDoc" class="ai-doc"><p class="muted">위에서 [이상징후 요약 생성] 또는 [경영진 보고서 작성]을 누르세요. 분석(①~⑥)을 먼저 실행할수록 내용이 풍부해집니다.</p></div>
+    </div>
+  </section>
+
+  <!-- 설정 -->
+  <section id="tab-settings" class="tab">
+    <div class="grid2">
+      <div class="card">
+        <h2>카카오지도 연결</h2>
+        <label class="field">JavaScript 키
+          <input type="text" id="sKey" placeholder="카카오 디벨로퍼스 > 내 애플리케이션 > 앱 키 > JavaScript 키">
+        </label>
+        <div class="row gap">
+          <button class="btn primary" id="btnKey">저장 후 연결</button>
+        </div>
+        <ol class="howto">
+          <li><a href="https://developers.kakao.com/console/app" target="_blank" rel="noopener">developers.kakao.com</a>에서 애플리케이션 생성</li>
+          <li>[앱] &gt; [플랫폼 키] &gt; [JavaScript 키] 클릭 &gt; <b>JavaScript SDK 도메인</b>에 <code id="originHint"></code> 등록</li>
+          <li>[카카오맵] &gt; [사용 설정] 상태 <b>ON</b></li>
+          <li><b>JavaScript 키</b> 값(REST API 키 아님)을 위에 입력</li>
+        </ol>
+      </div>
+      <div class="card">
+        <h2>판정 기준</h2>
+        <div class="grid-form">
+          <label class="field">집근처 반경(m)<input type="number" id="sR1" min="50" step="50"></label>
+          <label class="field">주의 반경(m)<input type="number" id="sR2" min="100" step="100"></label>
+          <label class="field">심야 시작<input type="time" id="sNightFrom"></label>
+          <label class="field">심야 종료<input type="time" id="sNightTo"></label>
+        </div>
+        <label class="field">분석 제외 업종 키워드 (쉼표 구분 — 주소가 실제 매장 위치가 아닌 업종)
+          <input type="text" id="sExclude">
+        </label>
+        <label class="field">고위험 업종 키워드 (집근처일 때 가점)
+          <input type="text" id="sRisky">
+        </label>
+        <div class="row gap" style="margin-bottom:10px">
+          <label class="chk"><input type="checkbox" id="sSatOff">토요일을 휴일로 봄</label>
+          <label class="chk"><input type="checkbox" id="sLaborDay">근로자의날(5/1)을 휴일로 봄</label>
+        </div>
+        <label class="field">추가 휴일 (YYYY-MM-DD, 쉼표 구분 — 창립기념일·회사 지정 휴무일 등)
+          <input type="text" id="sHolidays" placeholder="2026-12-31, 2027-01-02">
+        </label>
+        <label class="field">휴일 제외일 (YYYY-MM-DD — 주말 특근일 등 휴일이지만 근무한 날)
+          <input type="text" id="sWorkdays" placeholder="2026-03-07">
+        </label>
+      </div>
+      <div class="card">
+        <h2>제미나이(Gemini) AI 연결</h2>
+        <label class="field">Gemini API 키
+          <input type="password" id="sGeminiKey" placeholder="Google AI Studio에서 발급한 API 키 (AIza...)" autocomplete="off">
+        </label>
+        <label class="field">모델
+          <div class="row gap">
+            <select id="sGeminiModel" style="flex:1"></select>
+            <button class="btn small" id="btnGeminiModels">모델 목록 불러오기</button>
+          </div>
+        </label>
+        <div class="row gap">
+          <button class="btn primary" id="btnGeminiKey">저장 후 연결 테스트</button>
+        </div>
+        <ol class="howto">
+          <li><a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">Google AI Studio</a>에서 <b>Create API key</b>로 키 발급</li>
+          <li>위에 붙여넣고 저장 → 연결 테스트가 성공하면 ⑧ 탭에서 사용</li>
+        </ol>
+        <p class="muted" style="margin-bottom:0">키는 이 브라우저에만 저장됩니다. AI에는 집계 수치와 의심 거래 목록만 보내며, 기본적으로 <b>이용자 이름은 '직원01' 같은 가명으로 바꿔</b> 전송하고 결과를 받은 뒤 화면에서 실명으로 되돌립니다. 집주소·카드번호는 보내지 않습니다.</p>
+      </div>
+      <div class="card">
+        <h2>국세청 휴폐업 조회 (공공데이터포털)</h2>
+        <label class="field">서비스키 (일반 인증키 Decoding)
+          <input type="text" id="sNtsKey" placeholder="공공데이터포털 마이페이지 > 데이터활용 > 인증키">
+        </label>
+        <div class="row gap"><button class="btn primary" id="btnNtsKey">저장</button></div>
+        <ol class="howto">
+          <li><a href="https://www.data.go.kr/data/15081808/openapi.do" target="_blank" rel="noopener">data.go.kr</a>에서 <b>국세청_사업자등록정보 진위확인 및 상태조회 서비스</b> 활용신청 (자동승인)</li>
+          <li>마이페이지 &gt; 데이터활용 &gt; Open API &gt; 개발계정에서 <b>일반 인증키(Decoding)</b> 복사</li>
+          <li>위에 붙여넣고 저장 → ⑥ 휴폐업 조회 탭에서 실행</li>
+        </ol>
+        <p class="muted" style="margin-bottom:0">사업자등록번호만 국세청 API(api.odcloud.kr)로 브라우저에서 직접 전송됩니다. 신규 발급 키는 반영까지 1시간가량 걸릴 수 있습니다.</p>
+      </div>
+      <div class="card">
+        <h2>회사(근무지) 주소</h2>
+        <p class="muted">집이 회사와 가까운 직원은 업무 중 결제도 집근처로 잡힙니다. 회사 주소를 넣으면 회사 반경 안 거래를 <b>회사근처</b>로 따로 분류합니다.</p>
+        <label class="field">회사 주소<input type="text" id="sOffice" placeholder="서울 중구 세종대로 110"></label>
+        <label class="field">회사 반경(m)<input type="number" id="sOfficeR" min="100" step="100"></label>
+        <div id="officeInfo" class="muted"></div>
+      </div>
+      <div class="card">
+        <h2>위험점수 산정</h2>
+        <table class="tbl compact">
+          <tr><td>집근처</td><td>+50</td></tr>
+          <tr><td>주의 반경</td><td>+20</td></tr>
+          <tr><td>주말·공휴일 (집근처/주의일 때)</td><td>+20</td></tr>
+          <tr><td>심야 (집근처/주의일 때)</td><td>+15</td></tr>
+          <tr><td>고위험 업종 (집근처/주의일 때)</td><td>+15</td></tr>
+          <tr><td>같은 집근처 가맹점 3회 이상</td><td>+10</td></tr>
+          <tr><td>폐업 후 거래 (위치 무관)</td><td>+40</td></tr>
+          <tr><td>미등록 사업자 (위치 무관)</td><td>+20</td></tr>
+        </table>
+        <div class="row gap" style="margin-top:12px">
+          <button class="btn primary" id="btnSaveSettings">설정 저장 &amp; 재분석</button>
+          <button class="btn danger" id="btnReset">모든 저장 데이터 삭제</button>
+        </div>
+      </div>
+    </div>
+  </section>
+</main>
+
+<div id="toast" class="toast"></div>
+<script src="js/config.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>
